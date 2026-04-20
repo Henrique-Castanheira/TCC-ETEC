@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Choki Admin</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0 }
+    body { font-family: 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; min-height: 100vh }
+    nav { background: #161b22; padding: 14px 24px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #30363d }
+    .logo { color: #58a6ff; font-weight: 700; font-size: 18px }
+    nav button { background: none; border: none; color: #8b949e; font-size: 13px; padding: 6px 12px; border-radius: 6px; cursor: pointer; transition: .2s }
+    nav button:hover, nav button.on { background: #21262d; color: #e6edf3 }
+    .wrap { max-width: 700px; margin: 0 auto; padding: 28px 16px }
+    h1 { font-size: 20px; margin-bottom: 6px }
+    .sub { color: #8b949e; font-size: 13px; margin-bottom: 24px }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 22px; margin-bottom: 16px }
+    label { font-size: 12px; color: #8b949e; display: block; margin-bottom: 4px; margin-top: 10px }
+    label:first-child { margin-top: 0 }
+    input, select { width: 100%; padding: 9px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; font-size: 14px }
+    input:focus, select:focus { outline: none; border-color: #58a6ff }
+    .btn { display: inline-block; padding: 10px 22px; background: #238636; color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; transition: .2s; width: 100%; margin-top: 16px; font-weight: 600 }
+    .btn:hover { background: #2ea043 }
+    .msg { margin-top: 12px; padding: 10px 14px; border-radius: 6px; font-size: 13px; display: none }
+    .msg.ok  { background: #1a4a1f; color: #3fb950; border: 1px solid #2ea043; display: block }
+    .msg.err { background: #3b1219; color: #f85149; border: 1px solid #da3633; display: block }
+    .section { display: none }
+    .section.on { display: block }
+    .g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px }
+    @media(max-width:500px){ .g2 { grid-template-columns: 1fr } }
+    h2 { font-size: 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px }
+    .api-url { font-size: 11px; color: #8b949e; margin-bottom: 16px; font-family: monospace; background: #0d1117; padding: 6px 10px; border-radius: 4px; border: 1px solid #21262d }
+  </style>
+</head>
+<body>
+
+<nav>
+  <span class="logo">⚡ Choki Admin</span>
+  <button class="on" onclick="trocar('usuario', this)">👤 Usuário</button>
+  <button onclick="trocar('aparelho', this)">🔌 Aparelho</button>
+  <button onclick="trocar('leitura', this)">📊 Leitura</button>
+</nav>
+
+<div class="wrap">
+
+  <!-- ======= USUÁRIO ======= -->
+  <div class="section on" id="s-usuario">
+    <h1>👤 Cadastrar Usuário</h1>
+    <p class="sub">Cria um novo usuário no banco de dados</p>
+    <div class="card">
+      <p class="api-url">POST https://choki-server.onrender.com/api/usuario</p>
+      <div class="g2">
+        <div>
+          <label>Username</label>
+          <input id="u-nome" type="text" placeholder="joao123">
+        </div>
+        <div>
+          <label>Email</label>
+          <input id="u-email" type="email" placeholder="joao@email.com">
+        </div>
+      </div>
+      <label>Senha</label>
+      <input id="u-senha" type="password" placeholder="••••••••">
+      <div class="g2">
+        <div>
+          <label>Tarifa elétrica (R$/kWh)</label>
+          <input id="u-tarifa" type="number" step="0.01" placeholder="0.94">
+        </div>
+        <div>
+          <label>Nível de consumo</label>
+          <select id="u-nivel">
+            <option value="Baixo">Baixo</option>
+            <option value="Médio" selected>Médio</option>
+            <option value="Alto">Alto</option>
+            <option value="Nenhum">Nenhum</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn" onclick="cadastrarUsuario()">Cadastrar Usuário</button>
+      <div class="msg" id="msg-usuario"></div>
+    </div>
+  </div>
+
+  <!-- ======= APARELHO ======= -->
+  <div class="section" id="s-aparelho">
+    <h1>🔌 Cadastrar Aparelho</h1>
+    <p class="sub">Vincula um aparelho a um usuário existente</p>
+    <div class="card">
+      <p class="api-url">POST https://choki-server.onrender.com/api/aparelho</p>
+      <div class="g2">
+        <div>
+          <label>ID do Usuário</label>
+          <input id="ap-iduser" type="number" placeholder="1">
+        </div>
+        <div>
+          <label>Nome do aparelho</label>
+          <input id="ap-nome" type="text" placeholder="Geladeira">
+        </div>
+      </div>
+      <label>Descrição</label>
+      <input id="ap-desc" type="text" placeholder="Geladeira da cozinha">
+      <div class="g2">
+        <div>
+          <label>Horas de uso por dia</label>
+          <input id="ap-horas" type="number" step="0.5" placeholder="8">
+        </div>
+        <div>
+          <label>Dias de uso por mês</label>
+          <input id="ap-dias" type="number" placeholder="30">
+        </div>
+      </div>
+      <button class="btn" onclick="cadastrarAparelho()">Cadastrar Aparelho</button>
+      <div class="msg" id="msg-aparelho"></div>
+    </div>
+  </div>
+
+  <!-- ======= LEITURA ======= -->
+  <div class="section" id="s-leitura">
+    <h1>📊 Inserir Leitura</h1>
+    <p class="sub">Insere uma leitura manual para um aparelho</p>
+    <div class="card">
+      <p class="api-url">POST https://choki-server.onrender.com/api/leitura</p>
+      <div class="g2">
+        <div>
+          <label>ID do Aparelho</label>
+          <input id="lr-idap" type="number" placeholder="6">
+        </div>
+        <div>
+          <label>Tensão (V)</label>
+          <input id="lr-tensao" type="number" step="0.1" placeholder="127.0">
+        </div>
+      </div>
+      <div class="g2">
+        <div>
+          <label>Corrente (A)</label>
+          <input id="lr-corrente" type="number" step="0.01" placeholder="2.54">
+        </div>
+        <div>
+          <label>Potência (W)</label>
+          <input id="lr-potencia" type="number" step="0.1" placeholder="322.6">
+        </div>
+      </div>
+      <label>Energia (kWh)</label>
+      <input id="lr-energia" type="number" step="0.0001" placeholder="0.0009">
+      <p style="font-size:11px;color:#8b949e;margin-top:6px">
+        💡 Potência = Tensão × Corrente &nbsp;|&nbsp; Energia = Potência × horas / 1000
+      </p>
+      <button class="btn" onclick="cadastrarLeitura()">Inserir Leitura</button>
+      <div class="msg" id="msg-leitura"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API = 'https://choki-server.onrender.com';
+
+function trocar(id, btn) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('on'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('on'));
+  document.getElementById('s-' + id).classList.add('on');
+  btn.classList.add('on');
+}
+
+function mostrarMsg(id, texto, tipo) {
+  const el = document.getElementById('msg-' + id);
+  el.textContent = texto;
+  el.className = 'msg ' + tipo;
+  setTimeout(() => el.className = 'msg', 5000);
+}
+
+async function cadastrarUsuario() {
+  const body = {
+    username:       document.getElementById('u-nome').value,
+    email:          document.getElementById('u-email').value,
+    password:       document.getElementById('u-senha').value,
+    tarifa_eletrica: parseFloat(document.getElementById('u-tarifa').value) || 0,
+    nivel_consumo:  document.getElementById('u-nivel').value
+  };
+
+  if (!body.username || !body.email || !body.password) {
+    mostrarMsg('usuario', '⚠ Preencha todos os campos obrigatórios', 'err'); return;
+  }
+
+  try {
+    const r = await fetch(API + '/api/usuario', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if (r.ok) {
+      mostrarMsg('usuario', '✅ Usuário criado! ID: ' + data.id + ' · ' + data.username, 'ok');
+      ['u-nome','u-email','u-senha','u-tarifa'].forEach(id => document.getElementById(id).value = '');
+    } else {
+      mostrarMsg('usuario', '❌ Erro: ' + (data.erro || JSON.stringify(data)), 'err');
+    }
+  } catch(e) {
+    mostrarMsg('usuario', '❌ Erro de conexão: ' + e.message, 'err');
+  }
+}
+
+async function cadastrarAparelho() {
+  const body = {
+    id_usuario:    parseInt(document.getElementById('ap-iduser').value),
+    nome:          document.getElementById('ap-nome').value,
+    descricao:     document.getElementById('ap-desc').value,
+    horas_uso_dia: parseFloat(document.getElementById('ap-horas').value) || 0,
+    dias_uso_mes:  parseInt(document.getElementById('ap-dias').value) || 0
+  };
+
+  if (!body.id_usuario || !body.nome) {
+    mostrarMsg('aparelho', '⚠ Preencha ID do usuário e nome', 'err'); return;
+  }
+
+  try {
+    const r = await fetch(API + '/api/aparelho', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if (r.ok) {
+      mostrarMsg('aparelho', '✅ Aparelho criado! ID: ' + data.id + ' · ' + data.nome, 'ok');
+      ['ap-iduser','ap-nome','ap-desc','ap-horas','ap-dias'].forEach(id => document.getElementById(id).value = '');
+    } else {
+      mostrarMsg('aparelho', '❌ Erro: ' + (data.erro || JSON.stringify(data)), 'err');
+    }
+  } catch(e) {
+    mostrarMsg('aparelho', '❌ Erro de conexão: ' + e.message, 'err');
+  }
+}
+
+async function cadastrarLeitura() {
+  const body = {
+    id_aparelho:  parseInt(document.getElementById('lr-idap').value),
+    tensao:       parseFloat(document.getElementById('lr-tensao').value) || 0,
+    corrente:     parseFloat(document.getElementById('lr-corrente').value) || 0,
+    potencia:     parseFloat(document.getElementById('lr-potencia').value) || 0,
+    energia_kwh:  parseFloat(document.getElementById('lr-energia').value) || 0
+  };
+
+  if (!body.id_aparelho) {
+    mostrarMsg('leitura', '⚠ Informe o ID do aparelho', 'err'); return;
+  }
+
+  try {
+    const r = await fetch(API + '/api/leitura', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if (r.ok) {
+      mostrarMsg('leitura', '✅ Leitura inserida! ID: ' + data.id, 'ok');
+      ['lr-idap','lr-tensao','lr-corrente','lr-potencia','lr-energia'].forEach(id => document.getElementById(id).value = '');
+    } else {
+      mostrarMsg('leitura', '❌ Erro: ' + (data.erro || JSON.stringify(data)), 'err');
+    }
+  } catch(e) {
+    mostrarMsg('leitura', '❌ Erro de conexão: ' + e.message, 'err');
+  }
+}
+</script>
+</body>
+</html>
