@@ -1,0 +1,873 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <WiFiManager.h>   // ← NOVO
+#include <ESPmDNS.h>       // ← NOVO
+// #include "EmonLib.h"
+
+
+
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+
+
+
+const float TENSAO_REDE = 127.0;
+const char* API_BASE    = "https://choki-server.onrender.com";
+const char* HOSTNAME    = "choki"; // → acesso via choki.local
+
+
+
+
+WebServer server(80);
+
+
+
+
+// --- Estado ---
+bool   logado        = false;
+int    usuarioId     = -1;
+String usuarioNome   = "";
+String usuarioEmail  = "";
+float  usuarioTarifa = 0.0;
+int    aparelhoId    = -1;
+String aparelhoNome  = "";
+
+
+
+
+unsigned long ultimoEnvio    = 0;
+unsigned long ultimaExibicao = 0;
+const unsigned long INTERVALO_ENVIO = 10000;
+const unsigned long INTERVALO_TELA  = 4000;
+int telaAtual = 0;
+
+
+
+
+float leituraCorrente = 0.0;
+float leituraPotencia = 0.0;
+
+
+
+
+// ==========================================
+// HELPERS
+// ==========================================
+String httpGet(String url) {
+  HTTPClient http;
+  http.begin(url);
+  http.setTimeout(12000);
+  int code = http.GET();
+  String body = (code == 200) ? http.getString() : "[]";
+  http.end();
+  return body;
+}
+
+
+
+
+int httpPost(String url, String payload) {
+  HTTPClient http;
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(12000);
+  int code = http.POST(payload);
+  http.end();
+  return code;
+}
+
+
+
+
+const char CSS[] PROGMEM = R"(
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh}
+a{color:#58a6ff;text-decoration:none}
+nav{background:#161b22;padding:12px 20px;display:flex;gap:12px;align-items:center;border-bottom:1px solid #30363d;flex-wrap:wrap}
+nav a{color:#8b949e;font-size:13px;padding:6px 10px;border-radius:6px;transition:.2s}
+nav a:hover,nav a.on{background:#21262d;color:#e6edf3}
+nav a.sair{color:#f85149;margin-left:auto}
+.logo{color:#58a6ff;font-weight:700;font-size:17px}
+.wrap{max-width:960px;margin:0 auto;padding:20px 14px}
+h1{font-size:20px;margin-bottom:18px}
+h2{font-size:14px;color:#8b949e;margin-bottom:12px;font-weight:500}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:18px;margin-bottom:14px}
+.btn{display:inline-block;padding:9px 18px;background:#238636;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer;transition:.2s;text-decoration:none}
+.btn:hover{background:#2ea043}
+.btn-blue{background:#1f6feb}.btn-blue:hover{background:#388bfd}
+.btn-red{background:#b62324}.btn-red:hover{background:#da3633}
+.btn-sm{padding:5px 10px;font-size:12px}
+input,select{width:100%;padding:9px 11px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:13px;margin-bottom:10px}
+input:focus,select:focus{outline:none;border-color:#58a6ff}
+label{font-size:12px;color:#8b949e;display:block;margin-bottom:3px}
+.erro{color:#f85149;font-size:13px;margin-top:6px;text-align:center}
+.ok{color:#3fb950;font-size:13px;margin-top:6px;text-align:center}
+.badge{padding:2px 7px;border-radius:4px;font-size:11px;background:#21262d;color:#8b949e}
+.badge-g{background:#1a4a1f;color:#3fb950}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:9px 10px;color:#8b949e;border-bottom:1px solid #30363d;font-weight:500}
+td{padding:9px 10px;border-bottom:1px solid #21262d}
+tr:hover td{background:#1c2128}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+.g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px}
+.stat{text-align:center}
+.sv{font-size:26px;font-weight:700;color:#58a6ff}
+.sl{font-size:11px;color:#8b949e;margin-top:3px}
+.ap-card{cursor:pointer;transition:.2s;display:block;color:inherit}
+.ap-card:hover .card{border-color:#58a6ff}
+@media(max-width:600px){.g2,.g3,.g4{grid-template-columns:1fr 1fr}}
+@media(max-width:400px){.g2,.g3,.g4{grid-template-columns:1fr}}
+)";
+
+
+
+
+String nav(String pg) {
+  if (!logado) return "";
+  return "<nav>"
+    "<span class='logo'>⚡ Choki</span>"
+    "<a href='/dash'" + String(pg=="dash"?" class='on'":"") + ">Dashboard</a>"
+    "<a href='/aparelhos'" + String(pg=="ap"?" class='on'":"") + ">Aparelhos</a>"
+    "<a href='/leituras'" + String(pg=="lr"?" class='on'":"") + ">Leituras</a>"
+    "<a href='/perfil'" + String(pg=="pf"?" class='on'":"") + ">Perfil</a>"
+    "<a href='/logout' class='sair'>Sair</a>"
+    "</nav>";
+}
+
+
+
+
+String head(String titulo) {
+  return "<!DOCTYPE html><html lang='pt-BR'><head>"
+    "<meta charset='UTF-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>" + titulo + " | Choki</title>"
+    "<style>" + String(CSS) + "</style>"
+    "</head><body>";
+}
+
+
+
+
+// ==========================================
+// LOGIN
+// ==========================================
+void paginaLogin() {
+  String h = head("Login");
+  h += R"(
+<div style='display:flex;justify-content:center;align-items:center;min-height:100vh'>
+<div class='card' style='width:100%;max-width:340px'>
+  <div style='text-align:center;margin-bottom:20px'>
+    <div style='font-size:38px'>⚡</div>
+    <h1 style='margin:6px 0 3px'>Choki Energy</h1>
+    <p style='color:#8b949e;font-size:12px'>Monitoramento inteligente</p>
+  </div>
+  <form action='/login' method='POST'>
+    <label>Email</label>
+    <input type='email' name='email' placeholder='seu@email.com' required>
+    <label>Senha</label>
+    <input type='password' name='senha' placeholder='••••••••' required>
+    <button class='btn' style='width:100%;margin-top:4px'>Entrar</button>
+  </form>)";
+  if (server.hasArg("erro")) h += "<p class='erro'>⚠ Email ou senha incorretos</p>";
+  h += "</div></div></body></html>";
+  server.send(200, "text/html", h);
+}
+
+
+
+
+void processarLogin() {
+  String email = server.arg("email");
+  String senha  = server.arg("senha");
+
+
+
+
+  StaticJsonDocument<200> req;
+  req["email"]    = email;
+  req["password"] = senha;
+  String payload;
+  serializeJson(req, payload);
+
+
+
+
+  HTTPClient http;
+  http.begin(String(API_BASE) + "/api/login");
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(12000);
+  int code = http.POST(payload);
+  String body = http.getString();
+  http.end();
+
+
+
+
+  if (code == 200) {
+    DynamicJsonDocument doc(512);
+    deserializeJson(doc, body);
+    usuarioId     = doc["id"];
+    usuarioNome   = doc["username"].as<String>();
+    usuarioEmail  = doc["email"].as<String>();
+    usuarioTarifa = doc["tarifa_eletrica"] | 0.0;
+    logado        = true;
+
+
+
+
+    lcd.clear();
+    lcd.setCursor(0, 0); lcd.print("Ola, " + usuarioNome.substring(0, 10) + "!");
+    lcd.setCursor(0, 1); lcd.print("Bem-vindo!");
+
+
+
+
+    server.sendHeader("Location", "/dash");
+    server.send(302);
+  } else {
+    server.sendHeader("Location", "/?erro=1");
+    server.send(302);
+  }
+}
+
+
+
+
+// ==========================================
+// DASHBOARD
+// ==========================================
+void paginaDash() {
+  if (!logado) { server.sendHeader("Location", "/"); server.send(302); return; }
+
+
+
+
+  String apSel = aparelhoId != -1 ?
+    "monitorando <strong>" + aparelhoNome + "</strong>" :
+    "nenhum aparelho selecionado";
+
+
+
+
+  String h = head("Dashboard") + nav("dash") + "<div class='wrap'>";
+  h += "<h1>📊 Dashboard</h1>";
+
+
+
+
+  h += "<div class='g4' style='margin-bottom:16px'>";
+  h += "<div class='card stat'><div class='sv' id='sv-c'>--</div><div class='sl'>Corrente (A)</div></div>";
+  h += "<div class='card stat'><div class='sv' id='sv-p'>--</div><div class='sl'>Potência (W)</div></div>";
+  h += "<div class='card stat'><div class='sv' id='sv-v'>" + String(TENSAO_REDE, 0) + "</div><div class='sl'>Tensão (V)</div></div>";
+  h += "<div class='card stat'><div class='sv' id='sv-k'>--</div><div class='sl'>kWh hoje</div></div>";
+  h += "</div>";
+
+
+
+
+  h += "<div class='card' style='margin-bottom:14px'>";
+  h += "<p style='font-size:13px;color:#8b949e'>Aparelho: " + apSel + " · ";
+  h += "<a href='/aparelhos'>trocar</a></p></div>";
+
+
+
+
+  h += "<div class='card'><h2>Consumo nas últimas 24h</h2>";
+  h += "<canvas id='chart' height='120'></canvas></div>";
+
+
+
+
+  h += "<div class='g2'>";
+  h += "<div class='card stat'><div class='sv' id='sv-custo'>--</div><div class='sl'>Custo estimado hoje (R$)</div></div>";
+  h += "<div class='card stat'><div class='sv' id='sv-total'>--</div><div class='sl'>Leituras hoje</div></div>";
+  h += "</div>";
+  h += "</div>";
+
+
+
+
+  h += R"(
+<script src='https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js'></script>
+<script>
+const API = ')" + String(API_BASE) + R"(';
+const ID_AP = )" + String(aparelhoId) + R"(;
+const TARIFA = )" + String(usuarioTarifa, 4) + R"(;
+let chart;
+
+
+
+
+async function carregarDash() {
+  if (ID_AP === -1) return;
+  try {
+    const r = await fetch(API + '/api/leitura/' + ID_AP + '/hoje');
+    const data = await r.json();
+    if (!Array.isArray(data) || data.length === 0) return;
+
+
+
+
+    const last = data[data.length - 1];
+    document.getElementById('sv-c').textContent = parseFloat(last.corrente).toFixed(2);
+    document.getElementById('sv-p').textContent = parseFloat(last.potencia).toFixed(1);
+
+
+
+
+    let totalKwh = 0;
+    data.forEach(d => totalKwh += parseFloat(d.energia_kwh || 0));
+    document.getElementById('sv-k').textContent = totalKwh.toFixed(4);
+    document.getElementById('sv-custo').textContent = (totalKwh * TARIFA).toFixed(2);
+    document.getElementById('sv-total').textContent = data.length;
+
+
+
+
+    const labels = data.map(d => d.timestamp.substring(11,16));
+    const vals   = data.map(d => parseFloat(d.potencia));
+
+
+
+
+    if (chart) chart.destroy();
+    chart = new Chart(document.getElementById('chart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Potência (W)',
+          data: vals,
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,0.1)',
+          fill: true,
+          tension: 0.4,
+          pointRadius: 2
+        }]
+      },
+      options: {
+        plugins: { legend: { labels: { color: '#8b949e', font: { size: 11 } } } },
+        scales: {
+          x: { ticks: { color: '#8b949e', font: { size: 10 } }, grid: { color: '#21262d' } },
+          y: { ticks: { color: '#8b949e', font: { size: 10 } }, grid: { color: '#21262d' } }
+        }
+      }
+    });
+  } catch(e) { console.log(e); }
+}
+
+
+
+
+carregarDash();
+setInterval(carregarDash, 10000);
+</script></body></html>)";
+
+
+
+
+  server.send(200, "text/html", h);
+}
+
+
+
+
+// ==========================================
+// APARELHOS
+// ==========================================
+void paginaAparelhos() {
+  if (!logado) { server.sendHeader("Location", "/"); server.send(302); return; }
+
+
+
+
+  String bodyAp = httpGet(String(API_BASE) + "/api/aparelho/" + usuarioId);
+  String cards  = "";
+
+
+
+
+  DynamicJsonDocument docAp(1024);
+  if (!deserializeJson(docAp, bodyAp)) {
+    JsonArray arr = docAp.as<JsonArray>();
+    for (JsonObject ap : arr) {
+      int    id    = ap["id"];
+      String nome  = ap["nome"].as<String>();
+      String desc  = ap["descricao"].as<String>();
+      float  horas = ap["horas_uso_dia"] | 0.0;
+      int    dias  = ap["dias_uso_mes"]  | 0;
+      bool   sel   = (id == aparelhoId);
+
+
+
+
+      cards += "<a class='ap-card' href='/selecionar?id=" + String(id) + "&nome=" + nome + "'>";
+      cards += "<div class='card' style='" + String(sel ? "border-color:#238636" : "") + "'>";
+      cards += "<div style='display:flex;justify-content:space-between;align-items:flex-start'>";
+      cards += "<div><strong>" + nome + "</strong>";
+      if (sel) cards += " <span class='badge badge-g'>monitorando</span>";
+      cards += "<p style='color:#8b949e;font-size:12px;margin-top:5px'>" + desc + "</p>";
+      cards += "<p style='color:#8b949e;font-size:12px;margin-top:3px'>⏱ " + String(horas, 0) + "h/dia · 📅 " + String(dias) + " dias/mês</p>";
+      cards += "</div><span style='font-size:28px'>🔌</span></div></div></a>";
+    }
+    if (cards == "") cards = "<div class='card'><p style='color:#8b949e;text-align:center'>Nenhum aparelho cadastrado</p></div>";
+  }
+
+
+
+
+  String h = head("Aparelhos") + nav("ap") + "<div class='wrap'>";
+  h += "<h1>🔌 Aparelhos</h1>";
+  h += "<h2>Clique para monitorar</h2>";
+  h += cards;
+  h += "</div></body></html>";
+  server.send(200, "text/html", h);
+}
+
+
+
+
+void selecionarAparelho() {
+  if (!logado) { server.sendHeader("Location", "/"); server.send(302); return; }
+  aparelhoId   = server.arg("id").toInt();
+  aparelhoNome = server.arg("nome");
+  telaAtual    = 0;
+
+
+
+
+  lcd.clear();
+  lcd.setCursor(0, 0); lcd.print("Aparelho:");
+  lcd.setCursor(0, 1); lcd.print(aparelhoNome.substring(0, 16));
+  delay(1500);
+
+
+
+
+  server.sendHeader("Location", "/dash");
+  server.send(302);
+}
+
+
+
+
+// ==========================================
+// LEITURAS
+// ==========================================
+void paginaLeituras() {
+  if (!logado) { server.sendHeader("Location", "/"); server.send(302); return; }
+  if (aparelhoId == -1) { server.sendHeader("Location", "/aparelhos"); server.send(302); return; }
+
+
+
+
+  String h = head("Leituras") + nav("lr") + "<div class='wrap'>";
+  h += "<h1>📋 Leituras — " + aparelhoNome + "</h1>";
+
+
+
+
+  h += "<div class='g3' style='margin-bottom:14px'>";
+  h += "<div class='card stat'><div class='sv' id='med-c'>--</div><div class='sl'>Corrente Média (A)</div></div>";
+  h += "<div class='card stat'><div class='sv' id='med-p'>--</div><div class='sl'>Potência Média (W)</div></div>";
+  h += "<div class='card stat'><div class='sv' id='custo'>--</div><div class='sl'>Custo Hoje (R$)</div></div>";
+  h += "</div>";
+
+
+
+
+  h += "<div class='card' style='margin-bottom:14px'>";
+  h += "<label>Período</label>";
+  h += "<select id='periodo' onchange='carregar()'>";
+  h += "<option value='hoje'>Últimas 24h</option>";
+  h += "<option value='mensal'>Últimos 30 dias</option>";
+  h += "</select></div>";
+
+
+
+
+  h += "<div class='card' style='overflow-x:auto'>";
+  h += "<table><thead><tr>";
+  h += "<th>Data/Hora</th><th>Tensão</th><th>Corrente</th><th>Potência</th><th>kWh</th>";
+  h += "</tr></thead><tbody id='tabela'>";
+  h += "<tr><td colspan='5' style='text-align:center;color:#8b949e'>Carregando...</td></tr>";
+  h += "</tbody></table></div>";
+  h += "<p style='color:#8b949e;font-size:11px;margin-top:8px;text-align:right' id='total'></p>";
+  h += "</div>";
+
+
+
+
+  h += R"(
+<script>
+const API = ')" + String(API_BASE) + R"(';
+const ID_AP = )" + String(aparelhoId) + R"(;
+const TARIFA = )" + String(usuarioTarifa, 4) + R"(;
+
+
+
+
+async function carregar() {
+  const periodo = document.getElementById('periodo').value;
+  try {
+    const r = await fetch(API + '/api/leitura/' + ID_AP + '/' + periodo);
+    const data = await r.json();
+    const tbody = document.getElementById('tabela');
+
+
+
+
+    if (!Array.isArray(data) || data.length === 0) {
+      tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;color:#8b949e'>Nenhuma leitura</td></tr>";
+      return;
+    }
+
+
+
+
+    let rows = '', totalKwh = 0, somaC = 0, somaP = 0;
+    [...data].reverse().forEach(d => {
+      const ts = d.timestamp.replace('T',' ').substring(0,19);
+      totalKwh += parseFloat(d.energia_kwh || 0);
+      somaC    += parseFloat(d.corrente || 0);
+      somaP    += parseFloat(d.potencia || 0);
+      rows += '<tr>'
+        + '<td>' + ts + '</td>'
+        + '<td>' + parseFloat(d.tensao).toFixed(1) + 'V</td>'
+        + '<td>' + parseFloat(d.corrente).toFixed(2) + 'A</td>'
+        + '<td>' + parseFloat(d.potencia).toFixed(1) + 'W</td>'
+        + '<td>' + parseFloat(d.energia_kwh).toFixed(4) + '</td>'
+        + '</tr>';
+    });
+
+
+
+
+    tbody.innerHTML = rows;
+    document.getElementById('med-c').textContent = (somaC / data.length).toFixed(2);
+    document.getElementById('med-p').textContent = (somaP / data.length).toFixed(1);
+    document.getElementById('custo').textContent = (totalKwh * TARIFA).toFixed(2);
+    document.getElementById('total').textContent = data.length + ' leituras';
+  } catch(e) { console.log(e); }
+}
+
+
+
+
+carregar();
+</script></body></html>)";
+
+
+
+
+  server.send(200, "text/html", h);
+}
+
+
+
+
+// ==========================================
+// PERFIL
+// ==========================================
+void paginaPerfil() {
+  if (!logado) { server.sendHeader("Location", "/"); server.send(302); return; }
+
+
+
+
+  String h = head("Perfil") + nav("pf") + "<div class='wrap'>";
+  h += "<h1>👤 Perfil</h1>";
+
+
+
+
+  h += "<div class='card'>";
+  h += "<div style='display:flex;align-items:center;gap:16px;margin-bottom:16px'>";
+  h += "<div style='width:56px;height:56px;background:#21262d;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px'>👤</div>";
+  h += "<div><strong style='font-size:17px'>" + usuarioNome + "</strong>";
+  h += "<p style='color:#8b949e;font-size:13px'>" + usuarioEmail + "</p></div></div>";
+
+
+
+
+  h += "<div class='g2'>";
+  h += "<div><label>Tarifa elétrica</label><p style='font-size:16px;font-weight:600'>R$ " + String(usuarioTarifa, 4) + "/kWh</p></div>";
+  h += "<div><label>Aparelho monitorando</label><p style='font-size:16px;font-weight:600'>" + (aparelhoId != -1 ? aparelhoNome : "Nenhum") + "</p></div>";
+  h += "</div></div>";
+
+
+
+
+  h += "<div class='card'><h2>Resumo mensal</h2>";
+  h += "<div class='g3'>";
+  h += "<div class='stat'><div class='sv' id='m-kwh'>--</div><div class='sl'>kWh consumidos</div></div>";
+  h += "<div class='stat'><div class='sv' id='m-custo'>--</div><div class='sl'>Custo estimado (R$)</div></div>";
+  h += "<div class='stat'><div class='sv' id='m-lr'>--</div><div class='sl'>Total leituras</div></div>";
+  h += "</div></div>";
+
+
+
+
+  // ── Card de rede com botão de reset ─────────────────────────────
+  h += "<div class='card'>";
+  h += "<h2>Configurações de rede</h2>";
+  h += "<p style='font-size:12px;color:#8b949e;margin-bottom:12px'>Rede atual: <strong style='color:#e6edf3'>" + WiFi.SSID() + "</strong></p>";
+  h += "<a href='/reset-wifi' class='btn btn-red btn-sm' onclick=\"return confirm('Resetar WiFi? O ESP32 vai reiniciar.')\">Trocar rede WiFi</a>";
+  h += "</div>";
+  // ────────────────────────────────────────────────────────────────
+
+
+
+
+  h += "<a href='/logout' class='btn btn-red' style='margin-top:8px'>Sair da conta</a>";
+  h += "</div>";
+
+
+
+
+  if (aparelhoId != -1) {
+    h += R"(
+<script>
+const API = ')" + String(API_BASE) + R"(';
+const ID_AP = )" + String(aparelhoId) + R"(;
+const TARIFA = )" + String(usuarioTarifa, 4) + R"(;
+fetch(API + '/api/leitura/' + ID_AP + '/mensal')
+  .then(r => r.json())
+  .then(data => {
+    if (!Array.isArray(data)) return;
+    let kwh = 0;
+    data.forEach(d => kwh += parseFloat(d.energia_kwh || 0));
+    document.getElementById('m-kwh').textContent   = kwh.toFixed(3);
+    document.getElementById('m-custo').textContent = (kwh * TARIFA).toFixed(2);
+    document.getElementById('m-lr').textContent    = data.length;
+  }).catch(console.log);
+</script>)";
+  }
+
+
+
+
+  h += "</body></html>";
+  server.send(200, "text/html", h);
+}
+
+
+
+
+// ==========================================
+// LOGOUT
+// ==========================================
+void logout() {
+  logado        = false;
+  usuarioId     = -1;
+  usuarioNome   = "";
+  usuarioEmail  = "";
+  usuarioTarifa = 0.0;
+  aparelhoId    = -1;
+  aparelhoNome  = "";
+
+
+
+
+  lcd.clear();
+  lcd.setCursor(0, 0); lcd.print("Deslogado!");
+  lcd.setCursor(0, 1); lcd.print("Faca login");
+
+
+
+
+  server.sendHeader("Location", "/");
+  server.send(302);
+}
+
+
+
+
+// ==========================================
+// RESET WIFI  ← NOVO
+// ==========================================
+void resetWifi() {
+  server.send(200, "text/html",
+    head("Resetando WiFi") +
+    "<div style='display:flex;justify-content:center;align-items:center;min-height:100vh'>"
+    "<div class='card' style='text-align:center;max-width:340px'>"
+    "<div style='font-size:38px'>📶</div>"
+    "<h1 style='margin:10px 0'>Resetando WiFi</h1>"
+    "<p style='color:#8b949e'>O ESP32 vai reiniciar e criar a rede "
+    "<strong style='color:#e6edf3'>Choki-Setup</strong>.<br><br>"
+    "Conecte-se a ela pelo celular para configurar a nova rede.</p>"
+    "</div></div></body></html>"
+  );
+  delay(2000);
+  WiFiManager wm;
+  wm.resetSettings();
+  ESP.restart();
+}
+
+
+
+
+// ==========================================
+// ENVIAR LEITURA
+// ==========================================
+void enviarLeitura(float corrente, float potencia) {
+  if (!logado || aparelhoId == -1) return;
+  float energia = potencia * (INTERVALO_ENVIO / 1000.0 / 3600.0);
+
+
+
+
+  StaticJsonDocument<200> doc;
+  doc["id_aparelho"] = aparelhoId;
+  doc["tensao"]      = TENSAO_REDE;
+  doc["corrente"]    = corrente;
+  doc["potencia"]    = potencia;
+  doc["energia_kwh"] = energia;
+
+
+
+
+  String payload;
+  serializeJson(doc, payload);
+  int code = httpPost(String(API_BASE) + "/api/leitura", payload);
+  Serial.print("Envio → HTTP "); Serial.println(code);
+}
+
+
+
+
+// ==========================================
+// SETUP
+// ==========================================
+void setup() {
+  Serial.begin(115200);
+  lcd.init();
+  lcd.backlight();
+
+
+
+
+  // --- WiFiManager ------------------------------------------------
+  WiFiManager wm;
+  wm.setTitle("Choki Energy");
+  wm.setConfigPortalTimeout(180); // fecha portal após 3 min sem configurar
+
+
+
+
+  lcd.clear();
+  lcd.setCursor(0, 0); lcd.print("Configurando...");
+  lcd.setCursor(0, 1); lcd.print("Choki-Setup");
+
+
+
+
+  // Se já tem credenciais salvas → conecta direto (sem abrir hotspot)
+  // Se não tem → cria hotspot "Choki-Setup" com senha "choki1234"
+  bool conectado = wm.autoConnect("Choki-Setup", "choki1234");
+
+
+
+
+  if (!conectado) {
+    lcd.clear();
+    lcd.setCursor(0, 0); lcd.print("Timeout WiFi");
+    lcd.setCursor(0, 1); lcd.print("Reiniciando...");
+    delay(2000);
+    ESP.restart();
+  }
+  // ----------------------------------------------------------------
+
+
+
+
+  // --- mDNS -------------------------------------------------------
+  if (MDNS.begin(HOSTNAME)) {
+    Serial.println("mDNS OK → http://choki.local");
+  }
+  // ----------------------------------------------------------------
+
+
+
+
+  lcd.clear();
+  lcd.setCursor(0, 0); lcd.print("WiFi OK!");
+  lcd.setCursor(0, 1); lcd.print(WiFi.localIP());
+  delay(2000);
+
+
+
+
+  server.on("/",            HTTP_GET,  paginaLogin);
+  server.on("/login",       HTTP_POST, processarLogin);
+  server.on("/dash",        HTTP_GET,  paginaDash);
+  server.on("/aparelhos",   HTTP_GET,  paginaAparelhos);
+  server.on("/selecionar",  HTTP_GET,  selecionarAparelho);
+  server.on("/leituras",    HTTP_GET,  paginaLeituras);
+  server.on("/perfil",      HTTP_GET,  paginaPerfil);
+  server.on("/logout",      HTTP_GET,  logout);
+  server.on("/reset-wifi",  HTTP_GET,  resetWifi); // ← NOVO
+  server.begin();
+
+
+
+
+  lcd.clear();
+  lcd.setCursor(0, 0); lcd.print("choki.local");
+  lcd.setCursor(0, 1); lcd.print(WiFi.localIP());
+}
+
+
+
+
+// ==========================================
+// LOOP
+// ==========================================
+void loop() {
+  server.handleClient();
+  // MDNS.update();  ❌ REMOVIDO (não existe no ESP32)
+
+
+  if (!logado || aparelhoId == -1) return;
+
+
+  leituraCorrente = 0.0;
+  leituraPotencia = 0.0;
+
+
+  unsigned long agora = millis();
+
+
+  if (agora - ultimoEnvio >= INTERVALO_ENVIO) {
+    ultimoEnvio = agora;
+    enviarLeitura(leituraCorrente, leituraPotencia);
+  }
+
+
+  if (agora - ultimaExibicao >= INTERVALO_TELA) {
+    ultimaExibicao = agora;
+    lcd.clear();
+    switch (telaAtual) {
+      case 0:
+        lcd.setCursor(0, 0); lcd.print("Ola, " + usuarioNome.substring(0, 10) + "!");
+        lcd.setCursor(0, 1); lcd.print(aparelhoNome.substring(0, 16));
+        break;
+      case 1:
+        lcd.setCursor(0, 0); lcd.print("Corrente:");
+        lcd.setCursor(0, 1); lcd.print("I:" + String(leituraCorrente, 2) + "A");
+        break;
+      case 2:
+        lcd.setCursor(0, 0); lcd.print("V:" + String(TENSAO_REDE, 0) + "V");
+        lcd.setCursor(0, 1); lcd.print("P:" + String(leituraPotencia, 1) + "W");
+        break;
+    }
+    telaAtual = (telaAtual + 1) % 3;
+  }
+}
