@@ -39,6 +39,7 @@ Economia Projetada: Comparativo anual do cenário atual vs. cenário otimizado.
 Tempo de Retorno: Em quanto tempo o investimento em eficiência se paga.
 
 👥 Equipe Choki
+
 Henrique Castanheira de Oliveira
 
 Hector Francisco de Oliveira
